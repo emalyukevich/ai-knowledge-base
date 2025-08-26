@@ -1,0 +1,74 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files
+data/
+datasets/
+*.csv
+*.tsv
+*.json
+*.parquet
+
+# Models
+models/
+*.pt
+*.pth
+*.bin
+*.h5
+*.onnx
+*.joblib
+*.pkl
+
+# Logs
+logs/
+*.log
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Airflow
+airflow/
+airflow_logs/
+
+# VSCode / PyCharm
+.vscode/
+.idea/
+
+# Mac / Linux / Windows
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# Conda
+envs/
+environments/
+.conda/
+conda_packages/
+pkgs/
+.condarc
