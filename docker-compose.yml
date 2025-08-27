@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ai-kb-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./fastapi_app:/app/fastapi_app
+      - ./requirements.txt:/app/requirements.txt
+    restart: always
+
