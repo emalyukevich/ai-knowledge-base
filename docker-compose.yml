@@ -6,8 +6,27 @@ services:
     container_name: ai-kb-api
     ports:
       - "8000:8000"
+    depends_on:
+      - clickhouse
     volumes:
       - ./fastapi_app:/app/fastapi_app
+      - ./etl:/app/etl
       - ./requirements.txt:/app/requirements.txt
     restart: always
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
+    ports:
+      - "8123:8123" #HTTP
+      - "9000:9000" #TCP
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ./clickhouse_data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: default_pass
