@@ -12,6 +12,7 @@ services:
       - ./fastapi_app:/app/fastapi_app
       - ./etl:/app/etl
       - ./requirements.txt:/app/requirements.txt
+      - ./data:/data
     restart: always
 
   clickhouse:

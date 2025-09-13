@@ -1,71 +1,48 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pathlib import Path
+import logging
+import aiofiles
 import shutil
 
-from etl.run_etl import process_pdf_file, process_html_file, process_csv_file, process_parquet_file
+from etl.run_etl import run_etl
+from fastapi_app.api.upload import router as upload_router
+from fastapi_app.config import RAW_DIR
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 app = FastAPI(
     title = "AI Knowledge Base API",
     description="Минимальный сервис для старта проекта",
-    version="0.1.0"
+    version="0.1.0",
 )
-
-RAW_DIR = Path("../data/raw")
-PROCESSED_DIR = Path("../data/processed")
+app.include_router(upload_router, prefix="/files")
 @app.post("/load_documents")
 async def load_documents(files: list[UploadFile] = File(...)):
     results = []
-    temp_files = []
 
-    try:
-        for file in files:
-            filename = file.filename
-            suffix = Path(filename).suffix.lower().lstrip(".")
+    for file in files:
+        if file.size and file.size > 50 * 1024 * 1024:
+            raise HTTPException(status_code=403, detail=f"Файл {file.filename} слишком большой. Используйте /files/upload-chunk")
 
-            raw_dir = RAW_DIR / suffix
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            raw_path = raw_dir / filename
-            temp_files.append(raw_path)
+        suffix = Path(file.filename).suffix.lower().lstrip(".")
 
-            with raw_path.open("wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+        raw_dir = RAW_DIR / suffix
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / file.filename
 
-            if suffix == "pdf":
-                try:
-                    out = process_pdf_file(raw_path)
-                except Exception as e:
-                    out = {"status": "error", "reason": str(e)}
-            elif suffix in ["htm", "html"]:
-                try:
-                    out = process_html_file(raw_path)
-                except Exception as e:
-                    out = {"status": "error", "reason": str(e)}
-            elif suffix == "csv":
-                try:
-                    out = process_csv_file(raw_path)
-                except Exception as e:
-                    out = {"status": "error", "reason": str(e)}
-            elif suffix == "parquet":
-                try:
-                    out = process_parquet_file(raw_path)
-                except Exception as e:
-                    out = {"status": "error", "reason": str(e)}
-            else:
-                out = {"status": "unsupported", "file": filename}
+        async with aiofiles.open(raw_path, "wb") as buffer:
+            content = await file.read()
+            await buffer.write(content)
 
-            results.append({
-                "file": filename,
-                "format": suffix,
-                "output": out
-            })
+        out = await run_etl(raw_path)
 
-        return {"status": "ok", "processed": results}
-    finally:
-        clean_up_temp_files(temp_files)
+        if raw_path.exists():
+            raw_path.unlink()
 
-def clean_up_temp_files(temp_files: list[Path]):
-    for temp_file in temp_files:
-        try:
-            if temp_file.exists():
-                temp_file.unlink()
-        except Exception as e:
-            print(f"Failed to cleanup {temp_file}: {str(e)}")
+        results.append({"file": file.filename, "format": suffix, "output": out})
+
+    return {"status": "ok", "processed": results}
+
+

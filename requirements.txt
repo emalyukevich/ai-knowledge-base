@@ -1,3 +1,4 @@
+aiofiles==24.1.0
 annotated-types==0.7.0
 anyio==4.10.0
 async-timeout==4.0.3
@@ -90,3 +91,4 @@ uvloop==0.21.0
 watchfiles==1.1.0
 websockets==15.0.1
 zstandard==0.24.0
+requests
