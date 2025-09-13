@@ -4,9 +4,16 @@ from bs4 import BeautifulSoup
 import fitz, pdfplumber
 import trafilatura
 
+import csv
+from io import StringIO
+
 def extract_csv(path: Path) -> list[dict]:
     df = pd.read_csv(path)
     return df.to_dict(orient="records")
+
+def extract_csv_content(content) -> list[dict]:
+    reader = csv.DictReader(StringIO(content))
+    return list(reader)
 
 def extract_html(path: Path) -> str:
     raw = path.read_text(encoding="utf-8", errors="ignore")
