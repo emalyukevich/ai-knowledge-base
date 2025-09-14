@@ -2,11 +2,11 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pathlib import Path
 import logging
 import aiofiles
-import shutil
 
 from etl.run_etl import run_etl
 from fastapi_app.api.upload import router as upload_router
 from fastapi_app.config import RAW_DIR
+from fastapi_app.api import embeddings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +18,7 @@ app = FastAPI(
     version="0.1.0",
 )
 app.include_router(upload_router, prefix="/files")
+app.include_router(embeddings.router, prefix="/api", tags=["embeddings"])
 @app.post("/load_documents")
 async def load_documents(files: list[UploadFile] = File(...)):
     results = []
