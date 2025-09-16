@@ -5,4 +5,4 @@ class EmbeddingsModel:
         self.model = SentenceTransformer(model_name)
 
     def encode(self, texts: list[str]) -> list[list[float]]:
-        return self.model.encode(texts, convert_to_numpy=True).tolist()
+        return self.model.encode(texts, batch_size=128, show_progress_bar=True ,convert_to_numpy=True).tolist()
