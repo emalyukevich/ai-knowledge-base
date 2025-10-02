@@ -4,8 +4,9 @@ import logging
 import aiofiles
 
 from etl.run_etl import run_etl
-from fastapi_app.api.upload import router as upload_router
 from fastapi_app.config import RAW_DIR
+from fastapi_app.api.upload import router as upload_router
+from fastapi_app.rag_router import router as rag_router
 from fastapi_app.api import embeddings
 
 logging.basicConfig(
@@ -19,6 +20,8 @@ app = FastAPI(
 )
 app.include_router(upload_router, prefix="/files")
 app.include_router(embeddings.router, prefix="/api", tags=["embeddings"])
+app.include_router(rag_router, prefix='/rag', tags=['RAG'])
+
 @app.post("/load_documents")
 async def load_documents(files: list[UploadFile] = File(...)):
     results = []
