@@ -71,4 +71,4 @@ environments/
 .conda/
 conda_packages/
 pkgs/
-.condarc
+.condarc.env

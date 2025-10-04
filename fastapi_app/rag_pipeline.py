@@ -1,5 +1,6 @@
 from typing import List, Union, Optional
 import os
+from dotenv import load_dotenv
 import logging
 import clickhouse_connect
 import numpy as np
@@ -7,10 +8,15 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 from huggingface_hub import InferenceClient
 
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 HF_TOKEN = os.getenv('HF_TOKEN')
+if HF_TOKEN is None:
+    raise ValueError("HF_TOKEN is not set. Add it to your .env file")
+
 model_name = "mistralai/Mistral-7B-Instruct-v0.2"
 client = InferenceClient(model=model_name, token=HF_TOKEN)
 

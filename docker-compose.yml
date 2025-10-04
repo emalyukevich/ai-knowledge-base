@@ -14,7 +14,11 @@ services:
       - ./requirements.txt:/app/requirements.txt
       - ./data:/data
       - ./embeddings:/app/embeddings
+    env_file:
+      - .env
     restart: always
+    networks:
+      - monitor-net
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
@@ -32,3 +36,34 @@ services:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: default_pass
+    networks:
+      - monitor-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - monitor-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitor-net
+
+networks:
+  monitor-net:
+    driver: bridge
