@@ -1,24 +1,91 @@
 from typing import List, Union, Optional
 import os
+import time
 from dotenv import load_dotenv
 import logging
 import clickhouse_connect
 import numpy as np
 import torch
-from transformers import AutoModel, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from huggingface_hub import InferenceClient
+
+from fastapi_app.errors.exceptions import LLMError, ValidationError
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-HF_TOKEN = os.getenv('HF_TOKEN')
-if HF_TOKEN is None:
-    raise ValueError("HF_TOKEN is not set. Add it to your .env file")
+USE_LOCAL = os.getenv('USE_LOCAL_MODEL', 'true').lower() in ('1', 'true', 'yes')
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/flan-t5-small")
+HF_TOKEN = os.getenv("HF_TOKEN")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-model_name = "mistralai/Mistral-7B-Instruct-v0.2"
-client = InferenceClient(model=model_name, token=HF_TOKEN)
+USE_MLFLOW = os.getenv('USE_MLFLOW', 'true').lower() in ('1', 'true', 'yes')
+
+if torch.backends.mps.is_available():
+    DEVICE = 'mps'
+elif torch.cuda.is_available():
+    DEVICE = 'cuda'
+else:
+    DEVICE = 'cpu'
+
+logger.info('RAG pipeline init. USE_LOCAL=%s, device=%s', USE_LOCAL, DEVICE)
+
+_embedding_model = None
+_local_llm_pipeline = None
+_hf_client = None
+_clickhouse_client = None
+
+def get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info('Loading embedding model: %s', EMBEDDING_MODEL)
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL, device='cpu')
+    return _embedding_model
+
+def get_clickhouse_client():
+    global _clickhouse_client
+    if _clickhouse_client is None:
+        _clickhouse_client = clickhouse_connect.get_client(
+            host=os.getenv('CLICKHOUSE_HOST', 'clickhouse'),
+            port=int(os.getenv('CLICKHOUSE_PORT', '8123')),
+            username=os.getenv('CLICKHOUSE_USER', 'default'),
+            password=os.getenv('CLICKHOUSE_PASSWORD', 'default_pass')
+        )
+    return _clickhouse_client
+
+def get_hf_client():
+    global _hf_client
+    if _hf_client is None:
+        if not HF_TOKEN:
+            raise ValueError('HF_TOKEN is not set but remote HF inference was requested.')
+        model_name = 'mistralai/Mistral-7B-Instruct-v0.2'
+        _hf_client = InferenceClient(model=model_name, token=HF_TOKEN)
+    return _hf_client
+
+def get_local_llm_pipeline():
+    """Return transformers pipeline for local LLM (lazy)."""
+    global _local_llm_pipeline
+    if _local_llm_pipeline is None:
+        model_name = LOCAL_LLM_MODEL
+        logger.info('Loading local LLM model: %s (device=%s). This may take time.', model_name, DEVICE)
+
+        tokenizer = AutoTokenizer.from_pretrained(LOCAL_LLM_MODEL)
+        model = AutoModelForCausalLM.from_pretrained(
+            LOCAL_LLM_MODEL,                torch_dtype=torch.float16 if DEVICE != "cpu" else torch.float32,
+            device_map="auto" if DEVICE != "cpu" else None
+        )
+        model.to(DEVICE)
+        _local_llm_pipeline = pipeline("text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            device=0 if DEVICE != "cpu" else -1
+        )
+    return _local_llm_pipeline
+
+#-----------------------------------------------------------------------------------
 
 def get_query_embedding(
         texts: Union[str, List[str]],
@@ -31,47 +98,21 @@ def get_query_embedding(
     Преобразует текст или список текстов в вектор(ы).
     Возвращает np.ndarray: (dim,) для одного текста или (batch, dim) для списка.
     """
+    model_name_or_path = model_name_or_path or EMBEDDING_MODEL
     if isinstance(texts, str):
+        single = True
         texts = [texts]
+    else:
+        single = False
 
-    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    model = AutoModel.from_pretrained(model_name_or_path)
-    model.to(device)
-    model.eval()
-
-    enc = tokenizer(texts, padding=True, truncation=True, max_length=max_length, return_tensors="pt")
-    input_ids = enc['input_ids'].to(device)
-    attention_mask = enc['attention_mask'].to(device)
-
-    with torch.no_grad():
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-
-        if pooling == 'cls':
-            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
-                emb = outputs.pooler_output
-            else:
-                emb = outputs.last_hidden_state[:, 0, :]
-        else:
-            last_hidden = outputs.last_hidden_state # (batch, seq, dim)
-            mask = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
-            summed = (last_hidden * mask).sum(dim=1)
-            lengths = mask.sum(dim=1).clamp(min=1e-9)
-            emb = summed / lengths # (batch, dim)
-
-        if normalize:
-            emb = emb / (emb.norm(p=2, dim=1, keepdim=True) + 1e-12)
-
-        emb = emb.cpu().numpy().astype(np.float32)
-
-    return emb[0] if len(emb) == 1 else emb
+    if model_name_or_path.startswith("sentence-transformers/"):
+        m = get_embedding_model()
+        emb = m.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+        return emb[0] if single else emb
+    raise NotImplementedError('Only sentence-transformers embeddings are implemented in this pipeline.')
 
 def search_in_clickhouse(query_vector: np.ndarray, top_k: int = 5):
-    client = clickhouse_connect.get_client(
-        host="clickhouse", port=8123, username="default", password="default_pass"
-    )
-
+    client = get_clickhouse_client()
     vector_str = '[' + ','.join(map(str, query_vector.tolist())) + ']'
     sql = f'''
         SELECT
@@ -84,7 +125,6 @@ def search_in_clickhouse(query_vector: np.ndarray, top_k: int = 5):
     result = client.query(sql)
     rows = result.result_rows
     columns = result.column_names
-
     return [dict(zip(columns, row)) for row in rows]
 
 def build_prompt(query: str, results: list, max_context_len: int = 1000) -> str:
@@ -108,29 +148,67 @@ def build_prompt(query: str, results: list, max_context_len: int = 1000) -> str:
 
     context = "\n".join(context_parts)
 
-    prompt = f"""Используй приведённый контекст, чтобы ответить на вопрос.
-        Контекст:
-        {context}
-        
-        Вопрос: {query}
-        Ответ (будь максимально точным, опирайся только на контекст):"""
+    prompt = f"""
+    You are an AI assistant. Read the CONTEXT below and answer the QUESTION strictly using this information.
+    If you cannot find the answer, say "I don't know based on the given context."
+
+    CONTEXT:
+    {context}
+
+    QUESTION: {query}
+    ANSWER:
+    """
     return prompt
 
-def generate_answer(prompt: str) -> str:
+def generate_answer(prompt: str, max_tokens: int = 300, temperature: float = 0.7) -> str:
     try:
-        response = client.chat_completion(
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant for answering questions based on retrieved documents."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=512,
-            temperature=0.7
-        )
-        return response.choices[0].message["content"]
-    except Exception as e:
-        return f"Error during generation: {e}"
+        if USE_LOCAL:
+            try:
+                pipe = get_local_llm_pipeline()
+                formatted_prompt = f"""You are a helpful financial assistant.
+            Answer the QUESTION based only on the CONTEXT below.
 
-def rag_pipeline(query: str, embed_model: str = "sentence-transformers/all-MiniLM-L6-v2", top_k: int = 5) -> dict:
+            CONTEXT:
+            {prompt}
+            If the context does not contain enough information, reply: "I don’t know based on the given documents."
+            Answer:
+            """
+                output = pipe(
+                    formatted_prompt,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,
+                    temperature=temperature,
+                    top_p=0.9,
+                    repetition_penalty=1.1,
+                )
+                answer = output[0]["generated_text"].split("Answer:")[-1].strip()
+                answer = answer.split("\n")[0].strip()
+
+                return answer or "I don’t know based on the given documents."
+            except Exception as e:
+                logging.error(f"LLM generation failed: {e}", exc_info=True)
+                return f"Error during generation: {e}"
+        else:
+            client = get_hf_client()
+
+            response = client.chat_completion(
+                messages=[
+                    {"role": "system",
+                     "content": "You are a helpful assistant for answering questions based on retrieved documents."},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            try:
+                return response.choices[0].message["content"].strip()
+            except Exception:
+                return str(response)
+    except Exception as e:
+        logger.exception("LLM generation failed: %s", e)
+        raise LLMError(str(e))
+
+def rag_pipeline(query: str, embed_model: str = None, top_k: int = 5) -> dict:
     """
         Полный RAG-пайплайн:
         1. Получает эмбеддинг запроса
@@ -139,12 +217,22 @@ def rag_pipeline(query: str, embed_model: str = "sentence-transformers/all-MiniL
         4. Генерирует ответ через LLM
         Возвращает dict: {"answer": str, "sources": list}
     """
-    query_vec = get_query_embedding(query, model_name_or_path=embed_model)
-    retrieved = search_in_clickhouse(query_vec, top_k=top_k)
+    embed_model = embed_model or EMBEDDING_MODEL
+    if not query or not query.strip():
+        raise ValidationError("Empty query")
+
+    start = time.perf_counter()
+    q_vec = get_query_embedding(query, model_name_or_path=embed_model)
+    retrieved = search_in_clickhouse(q_vec, top_k=top_k)
+
     if not retrieved:
-        return {"answer": "Sorry, I didn't find relevant documents.", "sources": []}
+        latency = round(time.perf_counter() - start, 3)
+        return {"answer": "Sorry, I didn't find relevant documents.", "sources": [], "latency": latency,
+                "status": "success"}
+
     prompt = build_prompt(query, retrieved)
     answer = generate_answer(prompt)
-    sources = [str(r["id"]) for r in retrieved]
 
-    return {"answer": answer, "sources": sources}
+    latency = round(time.perf_counter() - start, 3)
+    sources = [str(r["id"]) for r in retrieved]
+    return {"answer": answer, "sources": sources, "latency": latency, "status": "success"}

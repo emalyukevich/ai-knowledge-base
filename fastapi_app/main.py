@@ -1,7 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from pathlib import Path
 import logging
 import aiofiles
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
 from etl.run_etl import run_etl
 from fastapi_app.config import RAW_DIR
@@ -9,6 +11,7 @@ from fastapi_app.api.upload import router as upload_router
 from fastapi_app.rag_router import router as rag_router
 from fastapi_app.metrics.router import router as metrics_router
 from fastapi_app.api import embeddings
+from fastapi_app.middlewares.mlflow_middleware import MlflowMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +26,8 @@ app.include_router(upload_router, prefix="/files")
 app.include_router(embeddings.router, prefix="/api", tags=["embeddings"])
 app.include_router(rag_router, prefix='/rag', tags=['RAG'])
 app.include_router(metrics_router)
+
+app.add_middleware(MlflowMiddleware)
 
 @app.post("/load_documents")
 async def load_documents(files: list[UploadFile] = File(...)):

@@ -14,6 +14,9 @@ services:
       - ./requirements.txt:/app/requirements.txt
       - ./data:/data
       - ./embeddings:/app/embeddings
+      - ./tracking:/app/tracking
+    environment:
+      - GIT_PYTHON_REFRESH=quiet
     env_file:
       - .env
     restart: always
@@ -61,6 +64,24 @@ services:
       - ./grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - monitor-net
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri /mlruns
+      --default-artifact-root /mlruns
+    ports:
+      - "5050:5000"
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./mlflow/mlruns:/mlruns
     networks:
       - monitor-net
 
