@@ -12,6 +12,7 @@
 
 ## 🏗Architecture  
 
+```bash
 📦 ai-knowledge-base/
 ├── airflow/ # DAGs, logs, plugins
 ├── data/
@@ -28,7 +29,7 @@
 ├── docker-compose.yml # Оркестрация всех сервисов
 └── requirements.txt
 
-
+```
 ---
 
 ## ⚙️ Tech Stack  
